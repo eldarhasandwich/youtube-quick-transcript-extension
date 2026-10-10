@@ -1,0 +1,16 @@
+const vm = require('node:vm');
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+const context = vm.createContext({});
+vm.runInContext(fs.readFileSync(__dirname+'/format.js','utf8'),context);
+const raw = 'Keep\nraw transcript unchanged.';
+const metadata = {title: 'Title', views: '0', isLive: false, description: 'First\nSecond', chapters: '0:00 Intro'};
+assert.equal(context.formatTranscript(raw,metadata,false),raw);
+assert.equal(context.formatTranscript(raw,null,true),raw);
+const formatted = context.formatTranscript(raw,metadata,true);
+assert.ok(formatted.endsWith('\n\nTRANSCRIPT\n'+raw));
+assert.match(formatted,/Views: 0/);
+assert.match(formatted,/Currently live: false/);
+assert.match(formatted,/DESCRIPTION\nFirst\nSecond/);
+assert.doesNotMatch(formatted,/undefined|null|Channel:/);
+console.log('PASS metadata on/off, missing fields, zero values and raw text preservation');

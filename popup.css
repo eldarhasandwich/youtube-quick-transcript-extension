@@ -1,0 +1,7 @@
+:root { color-scheme: light dark; font: 14px/1.5 system-ui, sans-serif; }
+body { width: 290px; padding: 16px; margin: 0; }
+h1 { font-size: 18px; margin: 0 0 18px; }
+label { display: flex; align-items: center; gap: 10px; font-weight: 600; cursor: pointer; }
+input { width: 18px; height: 18px; accent-color: #16833f; }
+p { color: GrayText; font-size: 12px; }
+#status { min-height: 18px; }

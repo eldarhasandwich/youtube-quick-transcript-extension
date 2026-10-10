@@ -1,0 +1,19 @@
+# Transcript Copier 3.3.1 — explicit video context
+
+Homepage HTTP 400 candidate fix: explicitly pass the selected video's externalVideoId to YouTube's native transcript command. HTTP errors now show YouTube's error message and whether the outgoing request included the correct video ID and a language code. No authorization values or full request bodies are logged. This change has mocked coverage but needs live homepage verification; YouTube's handler may ignore endpoint fields or require additional page context.
+
+Click the extension toolbar icon for settings. Include metadata defaults ON and persists. Each copy reads the current setting, including on already-open tabs. OFF copies raw transcript text. Missing fields are omitted. Metadata candidates: title, channel/IDs/URLs, published/upload dates, views, duration, description, category, tags, thumbnail, livestream flags/dates, unlisted flag, available caption tracks, structured or description chapters, and displayed likes/subscribers/comments when recognized. Counts are snapshots with retrieval time. Available tracks do not identify the selected transcript language. No extra metadata request is made.
+
+Metadata and text share one FIFO entry and byte budget. Older string-only entries are refreshed on the next pull to obtain metadata. Tests: node test.cjs; node cache-test.cjs; node format-test.cjs. Live field coverage varies with YouTube layouts.
+
+The persistent transcript cache is capped at 5 MiB, including serialized strings, keys and FIFO metadata. Oldest saved entries are evicted first; reads do not refresh their position. Writes are serialized across tabs. Oversized transcripts bypass the cache without evicting other videos and remain available to copy in the current page session. The copy button tooltip explains when caching was skipped. Storage failures do not fail a successful pull. This cap applies to persistent storage, not browser RAM or clipboard capacity: large request payloads/text can consume substantially more RAM than their UTF-8 size. Existing pagination and request timeout limits still apply.
+
+Legacy transcript: entries are removed on worker startup. Existing direct-v3: entries lack insertion timestamps, so their initial FIFO order is assigned lexicographically by key; all subsequent additions follow actual insertion order. Other extension settings are preserved. Evicted transcripts can be fetched again. Cache checks: node cache-test.cjs (including a 10 MiB string).
+
+Replace the files in your extension folder, reload in chrome://extensions, then refresh YouTube. The version must read 3.3.0. Thumbnail buttons and the native transcript request mechanism are retained.
+
+Click Pull transcript on a regular video card or beside Like, then Copy transcript. This build fetches watch metadata in the current YouTube page and passes its transcript endpoint to YouTube's own resolveCommand handler. YouTube supplies its normal session and request context. There is no background tab, copied authorization header, attestation fabrication, or third-party server.
+
+While the command runs, temporary fetch/XHR wrappers read only transcript responses whose request params match the selected endpoint. Hooks are cleaned up on success, failure, navigation, or a 20-second timeout. Metadata has a separate 15-second timeout. Only one native command per tab runs at a time. YouTube may display a transcript panel in the current page as a side effect. Whether this works from Home is unverified.
+
+This is an experimental undocumented integration. No live YouTube test has been performed in the build environment. Mocked tests cover dispatch, rejected responses, unavailable handlers, timeout cleanup, and old/new transcript response layouts. Run node test.cjs. Pagination remains explicitly unsupported. Shorts and playlist-only cards are excluded. Errors appear below each button.
