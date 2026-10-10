@@ -139,7 +139,11 @@ async function nativeTranscript(videoId) {
       visit(data);
       if (structuredChapters.length) metadata.chapters = [...new Set(structuredChapters)].join('\n');
     } catch {}
-    if (!endpoint) throw new Error('Native: transcript command missing from watch metadata.');
+
+    if (!endpoint) {
+      throw new Error('No transcript available.');
+    }
+
     if (location.href !== startUrl) throw new Error('Page changed while loading. Retry.');
     // Preserve only the transcript command and its routing metadata, never a navigation command.
     const command = {getTranscriptEndpoint: {...endpoint.getTranscriptEndpoint, externalVideoId: videoId}};
