@@ -15,7 +15,7 @@
 }
 .tc-wrapper:not(.tc-watch) {
   position: absolute;
-  top: 8px;
+  bottom: 8px;
   left: 8px;
   margin: 0;
   max-width: calc(100% - 16px);
@@ -39,4 +39,21 @@
   padding: 6px 8px;
   border-radius: 6px;
   background: #181818f2;
+}
+
+/* Thumbnail buttons: translucent background, solid on hover */
+.tc-wrapper:not(.tc-watch) .tc-button {
+  background: rgba(230, 0, 51, 0.3);
+}
+
+.tc-wrapper:not(.tc-watch) .tc-button[data-state="copy"] {
+  background: rgba(22, 131, 63, 0.3);
+}
+
+.tc-wrapper:not(.tc-watch) .tc-button:hover {
+  background: #e60033;
+}
+
+.tc-wrapper:not(.tc-watch) .tc-button[data-state="copy"]:hover {
+  background: #16833f;
 }
