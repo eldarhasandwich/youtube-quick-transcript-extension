@@ -82,7 +82,12 @@
       if (card.parentElement?.closest(CARD)) continue;
       const link = [...card.querySelectorAll('a[href]')].find(a => videoId(a.href));
       const id = link && videoId(link.href);
-      if (id) mount(card, id);
+      if (id) {
+        const thumbnail = card.querySelector(
+          'yt-thumbnail-view-model, ytd-thumbnail'
+        );
+        if (thumbnail) mount(thumbnail, id);
+      }
       else [...card.children].find(child => child.classList.contains('tc-wrapper'))?.remove();
     }
     const id = videoId(location.href);
