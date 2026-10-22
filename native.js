@@ -1,20 +1,26 @@
 // Serialized by executeScript: this function must not depend on outer bindings.
 async function nativeTranscript(videoId) {
+  const VERBOSE = true;
+  const aliasLog = msg => {
+    if (VERBOSE) console.log(`[Transcript Copier] ${msg}`);
+  };
   const LOCK = '__transcriptCopierNativeBusy';
-  if (window[LOCK]) return {ok: false, error: 'Another transcript is loading in this tab. Retry when it finishes.'};
+  if (window[LOCK]) {
+    aliasLog('A transcript request is already running in this tab.');
+    return {ok: false, error: 'Another transcript is loading in this tab. Retry when it finishes.'};
+  }
   window[LOCK] = true;
-  let cleanup = () => {};
+  let metadata;
   try {
     const startUrl = location.href;
-    const app = document.querySelector('ytd-app');
-    const controller = typeof app?.resolveCommand === 'function' ? app :
-      typeof app?.polymerController?.resolveCommand === 'function' ? app.polymerController : null;
-    if (!controller) throw new Error('Native: YouTube resolveCommand is unavailable on this page.');
+    aliasLog(`Started for ${location.pathname}; reading YouTube page context.`);
 
+    aliasLog('Fetching watch-page metadata.');
     const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
       credentials: 'include', signal: AbortSignal.timeout(15000)
     });
     if (!response.ok) throw new Error(`Metadata: HTTP ${response.status}`);
+    aliasLog(`Watch-page metadata returned HTTP ${response.status}.`);
     const html = await response.text();
     function objectAt(start) {
       let depth = 0, quoted = false, escaped = false;
@@ -30,6 +36,22 @@ async function nativeTranscript(videoId) {
       }
       throw new Error('Incomplete metadata');
     }
+    const pageConfig = {};
+    for (const match of html.matchAll(/\bytcfg\.set\(\s*/g)) {
+      const start = match.index + match[0].length;
+      if (html[start] === '{') {
+        try { Object.assign(pageConfig, objectAt(start)); } catch {}
+      }
+    }
+    const configValue = name => {
+      const fetchedPageValue = pageConfig[name];
+      if (fetchedPageValue !== undefined && fetchedPageValue !== null) return fetchedPageValue;
+      try {
+        const value = window.ytcfg?.get?.(name);
+        if (value !== undefined && value !== null) return value;
+      } catch {}
+      return undefined;
+    };
     let data;
     for (const pattern of [/\bytInitialData\s*=\s*/g, /window\["ytInitialData"\]\s*=\s*/g]) {
       for (const match of html.matchAll(pattern)) {
@@ -45,8 +67,9 @@ async function nativeTranscript(videoId) {
       for (const child of Object.values(value)) walk(child);
     }
     walk(data);
+    aliasLog(`Transcript endpoint found=${Boolean(endpoint)}.`);
     // Metadata is optional. Each field is isolated so a malformed field cannot fail the pull.
-    const metadata = {videoId, url: `https://www.youtube.com/watch?v=${videoId}`, retrievedAt: new Date().toISOString()};
+    metadata = {videoId, url: `https://www.youtube.com/watch?v=${videoId}`, retrievedAt: new Date().toISOString()};
     const field = (name, getter) => {
       try {
         const value = getter();
@@ -145,126 +168,110 @@ async function nativeTranscript(videoId) {
     }
 
     if (location.href !== startUrl) throw new Error('Page changed while loading. Retry.');
-    // Preserve only the transcript command and its routing metadata, never a navigation command.
-    const command = {getTranscriptEndpoint: {...endpoint.getTranscriptEndpoint, externalVideoId: videoId}};
-    if (endpoint.commandMetadata) command.commandMetadata = endpoint.commandMetadata;
-    if (endpoint.clickTrackingParams) command.clickTrackingParams = endpoint.clickTrackingParams;
-    const params = command.getTranscriptEndpoint.params;
+    const context = configValue('INNERTUBE_CONTEXT');
+    const apiKey = configValue('INNERTUBE_API_KEY');
+    const clientName = configValue('INNERTUBE_CONTEXT_CLIENT_NAME') ?? '1';
+    const clientVersion = configValue('INNERTUBE_CONTEXT_CLIENT_VERSION') ?? context?.client?.clientVersion;
+    if (!context || typeof context !== 'object') throw new Error('Native: YouTube InnerTube context is unavailable.');
+    if (typeof apiKey !== 'string' || !apiKey) throw new Error('Native: YouTube InnerTube API key is unavailable.');
 
-    return await new Promise(resolve => {
-      let finished = false;
-      const originalFetch = window.fetch;
-      const proto = XMLHttpRequest.prototype;
-      const originalOpen = proto.open, originalSend = proto.send;
-      const urls = new WeakMap();
-      const removers = new Set();
-      let requestSummary = '';
-      let timer;
-      function finish(result) {
-        if (finished) return;
-        finished = true;
-        cleanup();
-        resolve(result);
-      }
-      function isTranscript(url) {
-        try {
-          const parsed = new URL(url, location.href);
-          return parsed.origin === 'https://www.youtube.com' && parsed.pathname === '/youtubei/v1/get_transcript';
-        } catch { return false; }
-      }
-      async function matches(body) {
-        try {
-          let raw;
-          if (typeof body === 'string') raw = body;
-          else if (body != null) {
-            const blob = new Blob([body]);
-            const bytes = new Uint8Array(await blob.arrayBuffer());
-            raw = bytes[0] === 31 && bytes[1] === 139
-              ? await new Response(blob.stream().pipeThrough(new DecompressionStream('gzip'))).text()
-              : await blob.text();
-          }
-          const request = JSON.parse(raw);
-          if (request.params !== params) return false;
-          requestSummary = `videoId=${request.externalVideoId === videoId ? 'correct' : request.externalVideoId ? 'different' : 'missing'}, languageCode=${request.languageCode ? 'present' : 'missing'}`;
-          return true;
-        } catch { return false; }
-      }
-      function accept(status, payload) {
-        if (status < 200 || status >= 300) {
-          const message = typeof payload?.error?.message === 'string' ? payload.error.message.replace(/\s+/g, ' ').slice(0, 240) : '';
-          finish({ok: false, error: `Native get_transcript: HTTP ${status}${message ? ' — ' + message : ''}${requestSummary ? ' (' + requestSummary + ')' : ''}`});
-        }
-        else if (payload?.error) finish({ok: false, error: 'Native API returned an error'});
-        else finish({ok: true, payload, metadata});
-      }
-      function wrappedFetch(input, options) {
-        const url = typeof input === 'string' || input instanceof URL ? String(input) : input?.url;
-        let matching;
-        if (isTranscript(url)) {
-          matching = options?.body !== undefined ? matches(options.body) :
-            input instanceof Request ? input.clone().blob().then(matches) : Promise.resolve(false);
-        }
-        const promise = originalFetch.apply(this, arguments);
-        if (matching) promise.then(async response => {
-          const clone = response.clone();
-          if (!(await matching) || finished) return;
-          if (!response.ok) {
-            let errorPayload;
-            try { errorPayload = await clone.json(); } catch {}
-            accept(response.status, errorPayload); return;
-          }
-          try { accept(response.status, await clone.json()); }
-          catch { finish({ok: false, error: 'Native: response is not JSON'}); }
-        }, () => {}).catch(() => {});
-        return promise;
-      }
-      function wrappedOpen(method, url) {
-        urls.set(this, String(url));
-        return originalOpen.apply(this, arguments);
-      }
-      function wrappedSend(body) {
-        if (isTranscript(urls.get(this))) {
-          const xhr = this;
-          const matching = matches(body);
-          const onLoad = async () => {
-            if (!(await matching) || finished) return;
-            if (xhr.status < 200 || xhr.status >= 300) {
-              let errorPayload;
-              try { errorPayload = xhr.responseType === 'json' ? xhr.response : JSON.parse(xhr.responseText); } catch {}
-              accept(xhr.status, errorPayload); return;
-            }
-            try { accept(xhr.status, xhr.responseType === 'json' ? xhr.response : JSON.parse(xhr.responseText)); }
-            catch { finish({ok: false, error: 'Native: XHR response is not JSON'}); }
-          };
-          xhr.addEventListener('loadend', onLoad, {once: true});
-          removers.add(() => xhr.removeEventListener('loadend', onLoad));
-        }
-        return originalSend.apply(this, arguments);
-      }
-      const navigated = () => finish({ok: false, error: 'Page changed during transcript request. Retry.'});
-      cleanup = () => {
-        clearTimeout(timer);
-        window.removeEventListener('yt-navigate-start', navigated);
-        if (window.fetch === wrappedFetch) window.fetch = originalFetch;
-        if (proto.open === wrappedOpen) proto.open = originalOpen;
-        if (proto.send === wrappedSend) proto.send = originalSend;
-        for (const remove of removers) remove();
-      };
-      window.fetch = wrappedFetch;
-      proto.open = wrappedOpen;
-      proto.send = wrappedSend;
-      window.addEventListener('yt-navigate-start', navigated);
-      timer = setTimeout(() => finish({ok: false, error: 'Native command timed out: no matching transcript response observed.'}), 20000);
-      try {
-        // YouTube itself supplies its normal auth/client/attestation context.
-        const result = controller.resolveCommand(command);
-        if (result?.catch) result.catch(() => finish({ok: false, error: 'YouTube rejected the native command'}));
-      } catch { finish({ok: false, error: 'Native: resolveCommand threw an error'}); }
+    const url = new URL('/youtubei/v1/get_transcript', location.origin);
+    url.searchParams.set('key', apiKey);
+    url.searchParams.set('prettyPrint', 'false');
+    aliasLog(`Posting transcript params with ${context.client?.originalUrl || 'video page'} context to YouTube get_transcript.`);
+    const transcriptResponse = await fetch(url.href, {
+      method: 'POST', credentials: 'include', signal: AbortSignal.timeout(20000),
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Youtube-Client-Name': String(clientName),
+        ...(clientVersion ? {'X-Youtube-Client-Version': String(clientVersion)} : {})
+      },
+      body: JSON.stringify({context, params: endpoint.getTranscriptEndpoint.params, externalVideoId: videoId})
     });
+    let payload;
+    try { payload = await transcriptResponse.json(); }
+    catch {
+      throw new Error(`Native get_transcript: HTTP ${transcriptResponse.status}; response was not JSON.`);
+    }
+    if (!transcriptResponse.ok) {
+      const message = typeof payload?.error?.message === 'string'
+        ? payload.error.message.replace(/\s+/g, ' ').slice(0, 240) : '';
+      throw new Error(`Native get_transcript: HTTP ${transcriptResponse.status}${message ? ` — ${message}` : ''}`);
+    }
+    if (location.href !== startUrl) throw new Error('Page changed during transcript request. Retry.');
+    if (payload?.error) throw new Error('Native API returned an error.');
+    aliasLog('YouTube returned a transcript response.');
+    return {ok: true, payload, metadata};
   } catch (error) {
-    return {ok: false, error: error.message || 'Native transcript failed'};
+    aliasLog(`Failed: ${error.message || 'unknown error'}`);
+    return {ok: false, error: error.message || 'Native transcript failed', metadata};
   } finally {
-    cleanup();
     delete window[LOCK];
   }
+}
+
+// Runs in a temporary YouTube watch tab when InnerTube get_transcript rejects the direct request.
+async function nativeTranscriptFromPanel(videoId) {
+  const log = msg => console.log(`[Transcript Copier] ${msg}`);
+  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const deadline = Date.now() + 90000;
+  const getRows = () => [...document.querySelectorAll(
+    'ytd-transcript-segment-renderer, transcript-segment-view-model, yt-transcript-segment-view-model'
+  )];
+  const readRows = () => getRows().map(row => {
+    const timestampNode = row.querySelector('.segment-timestamp, [class*="segment-timestamp"]');
+    const textNode = row.querySelector('.segment-text, [class*="segment-text"], [role="text"]');
+    const raw = (textNode?.innerText || textNode?.textContent || row.innerText || row.textContent || '').trim();
+    const timestamp = (timestampNode?.innerText || timestampNode?.textContent || '').trim();
+    const text = (timestamp ? raw.replace(timestamp, '') : raw).replace(/^\s*\d{1,2}:\d{2}(?::\d{2})?\s*/, '').replace(/\s+/g, ' ').trim();
+    return {timestamp, text};
+  }).filter(segment => segment.text);
+
+  const currentVideoId = new URL(location.href).searchParams.get('v');
+  if (location.pathname !== '/watch' || currentVideoId !== videoId) {
+    return {ok: false, error: `YouTube rejected the direct request and the transcript panel needs the target video open (current page: ${location.pathname}, video match: ${currentVideoId === videoId}).`};
+  }
+  log('Direct endpoint was rejected; opening YouTube transcript panel.');
+
+  let button;
+  while (Date.now() < deadline && !button) {
+    button = document.querySelector('ytd-video-description-transcript-section-renderer button') ||
+      [...document.querySelectorAll('button, [role="button"]')].find(node => /show transcript/i.test(node.getAttribute('aria-label') || node.innerText || node.textContent || ''));
+    if (!button) await wait(250);
+  }
+  if (!button) return {ok: false, error: 'YouTube did not expose a Show transcript button for this video.'};
+
+  try { document.querySelector('video')?.pause(); } catch {}
+  button.click();
+  log('Clicked YouTube Show transcript.');
+  const seen = new Set();
+  const segments = new Map();
+  let quietPasses = 0;
+  while (Date.now() < deadline && quietPasses < 6) {
+    const before = seen.size;
+    for (const segment of readRows()) {
+      const key = `${segment.timestamp}\u0000${segment.text}`;
+      seen.add(key);
+      segments.set(key, segment.text);
+    }
+    if (seen.size === before) quietPasses++;
+    else quietPasses = 0;
+
+    const panel = document.querySelector(
+      'ytd-engagement-panel-section-list-renderer[target-id*="transcript"], [target-id="engagement-panel-searchable-transcript"]'
+    );
+    const scrollers = panel ? [panel, ...panel.querySelectorAll('*')].filter(node => node.scrollHeight > node.clientHeight + 20) : [];
+    const scroller = scrollers.sort((a, b) => b.clientHeight - a.clientHeight)[0];
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    await wait(350);
+  }
+
+  const lines = [...segments.values()];
+  if (!lines.length) return {ok: false, error: 'YouTube opened the transcript panel, but no transcript segments rendered.'};
+  log(`Collected ${lines.length} transcript segments from YouTube's panel.`);
+  return {
+    ok: true,
+    payload: {transcriptSegments: lines.map(text => ({transcriptSegmentViewModel: {text: {content: text}}}))},
+    metadata: {videoId, url: `https://www.youtube.com/watch?v=${videoId}`, retrievedAt: new Date().toISOString()}
+  };
 }

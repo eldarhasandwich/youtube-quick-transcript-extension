@@ -1,4 +1,4 @@
-# Transcript Copier 3.3.1 — explicit video context
+# Transcript Copier 3.3.4 — in-page transcript fallback
 
 Homepage HTTP 400 candidate fix: explicitly pass the selected video's externalVideoId to YouTube's native transcript command. HTTP errors now show YouTube's error message and whether the outgoing request included the correct video ID and a language code. No authorization values or full request bodies are logged. This change has mocked coverage but needs live homepage verification; YouTube's handler may ignore endpoint fields or require additional page context.
 
@@ -10,10 +10,10 @@ The persistent transcript cache is capped at 5 MiB, including serialized strings
 
 Legacy transcript: entries are removed on worker startup. Existing direct-v3: entries lack insertion timestamps, so their initial FIFO order is assigned lexicographically by key; all subsequent additions follow actual insertion order. Other extension settings are preserved. Evicted transcripts can be fetched again. Cache checks: node cache-test.cjs (including a 10 MiB string).
 
-Replace the files in your extension folder, reload in chrome://extensions, then refresh YouTube. The version must read 3.3.0. Thumbnail buttons and the native transcript request mechanism are retained.
+Replace the files in your extension folder, reload in chrome://extensions, then refresh YouTube. The version must read 3.3.4. Thumbnail buttons and transcript caching are retained.
 
-Click Pull transcript on a regular video card or beside Like, then Copy transcript. This build fetches watch metadata in the current YouTube page and passes its transcript endpoint to YouTube's own resolveCommand handler. YouTube supplies its normal session and request context. There is no background tab, copied authorization header, attestation fabrication, or third-party server.
+Click Pull transcript beside Like, then Copy transcript. The extension fetches the video's watch page, reads its transcript parameters and InnerTube context, then posts them to YouTube's internal `get_transcript` endpoint. If YouTube rejects that request with `FAILED_PRECONDITION` while already on the video page, it opens YouTube's transcript panel in that page and reads its rendered segments. On other pages, open the video first and retry; the extension does not open tabs.
 
-While the command runs, temporary fetch/XHR wrappers read only transcript responses whose request params match the selected endpoint. Hooks are cleaned up on success, failure, navigation, or a 20-second timeout. Metadata has a separate 15-second timeout. Only one native command per tab runs at a time. YouTube may display a transcript panel in the current page as a side effect. Whether this works from Home is unverified.
+Verbose diagnostics are controlled by the inline `VERBOSE` flag in `native.js`. Metadata has a 15-second timeout, the direct transcript request has a 20-second timeout, and the panel fallback has a 90-second limit. YouTube's internal endpoint and transcript-panel markup are undocumented and may change.
 
 This is an experimental undocumented integration. No live YouTube test has been performed in the build environment. Mocked tests cover dispatch, rejected responses, unavailable handlers, timeout cleanup, and old/new transcript response layouts. Run node test.cjs. Pagination remains explicitly unsupported. Shorts and playlist-only cards are excluded. Errors appear below each button.

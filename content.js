@@ -13,12 +13,14 @@
     if (!states.has(id)) {
       const item = {text: '', busy: false, error: '', copied: false};
       states.set(id, item);
-      chrome.storage.local.get(`direct-v3:${id}`).then(result => {
-        const cached = result[`direct-v3:${id}`];
-        if (!item.busy && typeof cached?.text === 'string') {
-          item.text = cached.text; item.metadata = cached.metadata; paint(id);
-        }
-      }).catch(() => {});
+      try {
+        chrome.storage.local.get(`direct-v3:${id}`).then(result => {
+          const cached = result[`direct-v3:${id}`];
+          if (!item.busy && typeof cached?.text === 'string') {
+            item.text = cached.text; item.metadata = cached.metadata; paint(id);
+          }
+        }).catch(() => {});
+      } catch {}
     }
     return states.get(id);
   }

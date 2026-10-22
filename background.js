@@ -4,7 +4,17 @@ async function loadTranscript(id, tabId) {
   const results = await chrome.scripting.executeScript({
     target: {tabId}, world: 'MAIN', func: nativeTranscript, args: [id]
   });
-  const result = results?.[0]?.result;
+  let result = results?.[0]?.result;
+  if (!result?.ok && /HTTP 400.*Precondition check failed/i.test(result?.error || '')) {
+    const fetchedMetadata = result.metadata;
+    const fallbackResults = await chrome.scripting.executeScript({
+      target: {tabId}, world: 'MAIN', func: nativeTranscriptFromPanel, args: [id]
+    });
+    result = fallbackResults?.[0]?.result;
+    if (result?.ok && fetchedMetadata) {
+      result.metadata = {...result.metadata, ...fetchedMetadata};
+    }
+  }
   if (!result?.ok) throw new Error(result?.error || 'Native command returned no result');
   let continuation = false;
   walk(result.payload, node => { if (node.continuationItemRenderer || node.nextContinuationData) continuation = true; });
