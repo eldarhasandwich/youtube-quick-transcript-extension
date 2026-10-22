@@ -2,6 +2,7 @@
   const states = new Map();
   const CARD = 'ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer, ytd-playlist-video-renderer, yt-lockup-view-model';
   let scheduled = false;
+  let showButtonOnThumbnails = false;
   function videoId(href) {
     try {
       const url = new URL(href, location.origin);
@@ -80,17 +81,21 @@
   }
   function scan() {
     scheduled = false;
-    for (const card of document.querySelectorAll(CARD)) {
-      if (card.parentElement?.closest(CARD)) continue;
-      const link = [...card.querySelectorAll('a[href]')].find(a => videoId(a.href));
-      const id = link && videoId(link.href);
-      if (id) {
-        const thumbnail = card.querySelector(
-          'yt-thumbnail-view-model, ytd-thumbnail'
-        );
-        if (thumbnail) mount(thumbnail, id);
+    if (showButtonOnThumbnails) {
+      for (const card of document.querySelectorAll(CARD)) {
+        if (card.parentElement?.closest(CARD)) continue;
+        const link = [...card.querySelectorAll('a[href]')].find(a => videoId(a.href));
+        const id = link && videoId(link.href);
+        if (id) {
+          const thumbnail = card.querySelector(
+            'yt-thumbnail-view-model, ytd-thumbnail'
+          );
+          if (thumbnail) mount(thumbnail, id);
+        }
+        else [...card.children].find(child => child.classList.contains('tc-wrapper'))?.remove();
       }
-      else [...card.children].find(child => child.classList.contains('tc-wrapper'))?.remove();
+    } else {
+      document.querySelectorAll('.tc-wrapper:not(.tc-watch)').forEach(element => element.remove());
     }
     const id = videoId(location.href);
     const actions = document.querySelector('ytd-watch-metadata #top-level-buttons-computed');
@@ -102,5 +107,14 @@
     scheduled = true; setTimeout(scan, 300);
   }).observe(document.documentElement, {subtree: true, childList: true, attributes: true, attributeFilter: ['href']});
   window.addEventListener('yt-navigate-finish', scan);
+  chrome.storage.local.get({showButtonOnThumbnails: false}).then(settings => {
+    showButtonOnThumbnails = settings.showButtonOnThumbnails === true;
+    scan();
+  }).catch(() => {});
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local' || !changes.showButtonOnThumbnails) return;
+    showButtonOnThumbnails = changes.showButtonOnThumbnails.newValue === true;
+    scan();
+  });
   scan();
 })();

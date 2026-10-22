@@ -1,6 +1,6 @@
 // Serialized by executeScript: this function must not depend on outer bindings.
 async function nativeTranscript(videoId) {
-  const VERBOSE = true;
+  const VERBOSE = false;
   const aliasLog = msg => {
     if (VERBOSE) console.log(`[Transcript Copier] ${msg}`);
   };
@@ -212,7 +212,10 @@ async function nativeTranscript(videoId) {
 
 // Runs in a temporary YouTube watch tab when InnerTube get_transcript rejects the direct request.
 async function nativeTranscriptFromPanel(videoId) {
-  const log = msg => console.log(`[Transcript Copier] ${msg}`);
+  const VERBOSE = false;
+  const log = msg => {
+    if (VERBOSE) console.log(`[Transcript Copier] ${msg}`);
+  };
   const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
   const deadline = Date.now() + 90000;
   const getRows = () => [...document.querySelectorAll(
